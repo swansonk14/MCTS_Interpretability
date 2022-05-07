@@ -1,0 +1,18 @@
+name: mcts_interpretability
+
+channels:
+  - conda-forge
+
+dependencies:
+  - python>=3.10
+  - matplotlib
+  - numpy
+  - pandas
+  - pip
+  - scikit-learn
+  - scikit-learn-intelex
+  - scipy
+  - tqdm
+  - transformers
+  - pip:
+    - typed-argument-parser
