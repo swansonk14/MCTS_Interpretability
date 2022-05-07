@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Literal, Set, Tuple
 
 import numpy as np
+import pandas as pd
 from scipy.stats import entropy
 from sklearnex import patch_sklearn
 patch_sklearn()
@@ -18,24 +19,20 @@ from tqdm import tqdm
 from mcts import get_best_mcts_node, get_phrases, MCTSExplainer
 
 
-def load_data_and_embeddings(embeddings_path: Path) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    with open(embeddings_path, 'rb') as f:
-        embedding_dicts = pickle.load(f)
-
-    texts = np.array([embedding_dict['text'] for embedding_dict in embedding_dicts])
-    embeddings_path = np.array([np.mean(embedding_dict['last_hidden_state'], axis=0) for embedding_dict in embedding_dicts])
-    stress = np.array([embedding_dict['label'] for embedding_dict in embedding_dicts])
-    subreddits = np.array([embedding_dict['subreddit'] for embedding_dict in embedding_dicts])
-
-    return texts, embeddings_path, stress, subreddits
+MODEL_NAMES = Literal['bnb', 'mnb', 'mlp', 'svm']
+MODEL_TYPES = BernoulliNB | MultinomialNB | MLPClassifier | SVC
 
 
-def train_sklearn_model(model_name: str,
+def train_sklearn_model(model_name: MODEL_NAMES,
                         train_text_counts: np.ndarray,
-                        train_labels: np.ndarray,
-                        test_text_counts: np.ndarray,
-                        test_labels: np.ndarray,
-                        average: str) -> BernoulliNB | MultinomialNB | MLPClassifier | SVC:
+                        train_labels: np.ndarray) -> MODEL_TYPES:
+    """Trains a scikit-learn model on the provided train token counts and labels.
+
+    :param model_name: The name of the model to train.
+    :param train_text_counts: A 2D array containing token counts for each training example (num_examples, num_tokens).
+    :param train_labels: A 1D array of labels for each training example.
+    :return: The trained model.
+    """
     # Build model
     if model_name == 'bnb':
         model = BernoulliNB()
@@ -51,6 +48,20 @@ def train_sklearn_model(model_name: str,
     # Train model
     model.fit(train_text_counts, train_labels)
 
+    return model
+
+
+def evaluate_sklearn_model(model: MODEL_TYPES,
+                           test_text_counts: np.ndarray,
+                           test_labels: np.ndarray,
+                           average: str) -> None:
+    """Evaluates a scikit-learn model on the provided test token counts and labels.
+
+    :param model: A trained scikit-learn model.
+    :param test_text_counts: A 2D array containing token counts for each training example (num_examples, num_tokens).
+    :param test_labels: A 1D array of labels for each training example.
+    :param average: The type of averaging to perform to compute the metrics.
+    """
     # Predict on the test set
     test_preds = model.predict(test_text_counts)
 
@@ -59,12 +70,10 @@ def train_sklearn_model(model_name: str,
     accuracy = accuracy_score(test_labels, test_preds)
 
     # Print scores
-    print(f'{model_name} precision = {precision:.3f}')
-    print(f'{model_name} recall = {recall:.3f}')
-    print(f'{model_name} F1 = {f1:.3f}')
-    print(f'{model_name} accuracy = {accuracy:.3f}\n')
-
-    return model
+    print(f'Precision = {precision:.3f}')
+    print(f'Recall = {recall:.3f}')
+    print(f'F1 = {f1:.3f}')
+    print(f'Accuracy = {accuracy:.3f}\n\n')
 
 
 """
@@ -102,72 +111,36 @@ def domain_entropy_scoring_fn_roberta(text: str) -> float:
     return domain_entropy
 """
 
-"""
-def run_mcts_on_text(text: str) -> None:
-    print('Original\n')
-    print(f'{text}\n')
-    print(f'Stress = {stress_scoring_fn(text):.3f}')
-    print(f'Entropy = {domain_entropy_scoring_fn(text):.3f}')
 
-    print()
-
-    # Run the MCTS search
-    for context_dependent in [True, False]:
-        if context_dependent:
-            print('Context dependent')
-        else:
-            print('Context independent')
-
-        mcts_nodes = mcts_explainer.explain(text=text, context_dependent=context_dependent)
-
-        # Select the best MCTSNode
-        best_mcts_node = get_best_mcts_node(mcts_nodes, max_percent_unmasked=0.5)
-        words = best_mcts_node.words
-        mask = best_mcts_node.mask
-
-        # Print the result
-        print('Masked\n')
-        print(' '.join(word if mask_element == 1 else '<mask>' for word, mask_element in zip(words, mask)) + '\n')
-
-        text_phrases = [' '.join(words[i] for i in phrase) for phrase in get_phrases(mask)]
-
-        for text_phrase in text_phrases:
-            print(f'{text_phrase}\n')
-
-        print(f'Stress = {np.mean([stress_scoring_fn(text_phrase) for text_phrase in text_phrases]):.3f}')
-        print(f'Entropy = {np.mean([domain_entropy_scoring_fn(text_phrase) for text_phrase in text_phrases]):.3f}')
-        print(f'Percent unmasked = {100 * best_mcts_node.percent_unmasked:.2f}%')
-"""
-
-
-def run_mcts(train_embeddings_path: Path,
-             test_embeddings_path: Path,
+def run_mcts(train_path: Path,
+             test_path: Path,
              model_name: Literal['bnb', 'mnb', 'mlp', 'svm'],
              save_dir: Path,
              alpha: float = 10.0) -> None:
     """Runs MCTS to extract context-dependent and context-independent explanations from text.
 
-    :param train_embeddings_path: The path to the train embeddings pickle file, which include the train text.
-    :param test_embeddings_path: The path to the test embeddings, which include the test text.
+    :param train_path: The path to the CSV file containing the train text and labels.
+    :param test_path: The path to the CSV file containing the test text and labels.
     :param model_name: The name of the model to train.
     :param save_dir: The path to a directory where the results will be saved.
     :param alpha: The value of the parameter that weighs context entropy compared to stress.
     """
-    # Load train data and embeddings
-    train_texts, train_embeddings, train_stress, train_subreddits = load_data_and_embeddings(
-        embeddings_path=train_embeddings_path,
-    )
+    breakpoint()
+    # Load train data
+    train_data = pd.read_csv(train_path)
+    train_texts, train_stress, train_subreddits = train_data['text'], train_data['label'], train_data['subreddit']
+
     print(f'Train size = {len(train_texts):,}')
     print(f'Num stressed = {np.sum(train_stress):,}\n')
 
-    # Load test data and embeddings
-    test_texts, test_embeddings, test_stress, test_subreddits = load_data_and_embeddings(
-        embeddings_path=test_embeddings_path,
-    )
+    # Load test data
+    test_data = pd.read_csv(test_path)
+    test_texts, test_stress, test_subreddits = test_data['text'], test_data['label'], test_data['subreddit']
+
     print(f'Test size = {len(test_texts):,}')
     print(f'Num stressed = {np.sum(test_stress):,}\n')
 
-    # Fit CountVectorizer
+    # Fit CountVectorizer on the train texts for stress model
     stress_count_vectorizer = CountVectorizer(ngram_range=(1, 1)).fit(train_texts)
 
     # Convert train and test texts to counts
@@ -175,16 +148,20 @@ def run_mcts(train_embeddings_path: Path,
     test_text_counts = stress_count_vectorizer.transform(test_texts)
 
     # Train stress model
-    print('Stress model')
+    print(f'Stress {model_name} model')
     stress_model = train_sklearn_model(
         model_name=model_name,
         train_text_counts=train_text_counts,
-        train_labels=train_stress,
+        train_labels=train_stress
+    )
+
+    # Evaluate stress model
+    evaluate_sklearn_model(
+        model=stress_model,
         test_text_counts=test_text_counts,
         test_labels=test_stress,
         average='binary'
     )
-    print()
 
     # Filter to certain subreddits
     selected_subreddits = {'anxiety', 'relationships', 'assistance'}
@@ -202,7 +179,7 @@ def run_mcts(train_embeddings_path: Path,
     test_subreddits_selected = test_subreddits[test_subreddit_mask]
     print(f'Test size after filtering = {len(test_texts_selected):,}\n')
 
-    # Fit CountVectorizer
+    # Fit CountVectorizer on selected train texts for context model
     context_count_vectorizer = CountVectorizer(ngram_range=(1, 1)).fit(train_texts_selected)
 
     # Convert train and test texts to counts
@@ -210,11 +187,16 @@ def run_mcts(train_embeddings_path: Path,
     test_text_selected_counts = context_count_vectorizer.transform(test_texts_selected)
 
     # Train subreddit model
-    print('Context (subreddit) model')
+    print(f'Context (subreddit) {model_name} model')
     context_model = train_sklearn_model(
         model_name=model_name,
         train_text_counts=train_text_selected_counts,
-        train_labels=train_subreddits_selected,
+        train_labels=train_subreddits_selected
+    )
+
+    # Evaluate subreddit model
+    evaluate_sklearn_model(
+        model=context_model,
         test_text_counts=test_text_selected_counts,
         test_labels=test_subreddits_selected,
         average='macro'
@@ -284,8 +266,10 @@ def run_mcts(train_embeddings_path: Path,
         original_stress.append(stress_scoring_fn(text))
         original_entropy.append(context_entropy_scoring_fn(text))
 
-        for context_dependent, masked_stress, masked_entropy in [(True, masked_stress_dependent, masked_entropy_dependent),
-                                                                 (False, masked_stress_independent, masked_entropy_independent)]:
+        for context_dependent, masked_stress, masked_entropy in [
+            (True, masked_stress_dependent, masked_entropy_dependent),
+            (False, masked_stress_independent, masked_entropy_independent)
+        ]:
             mcts_nodes = mcts_explainer.explain(text=text, context_dependent=context_dependent)
             best_mcts_node = get_best_mcts_node(mcts_nodes, max_percent_unmasked=0.5)
             words = best_mcts_node.words
@@ -317,9 +301,9 @@ if __name__ == '__main__':
     from tap import Tap
 
     class Args(Tap):
-        train_embeddings_path: Path  # The path to the train embeddings pickle file, which include the train text.
-        test_embeddings_path: Path  # The path to the test embeddings, which include the test text.
-        model_name: Literal['bnb', 'mnb', 'mlp', 'svm']  # The name of the model to train.
+        train_path: Path  # The path to the CSV file containing the train text and labels.
+        test_path: Path  # The path to the CSV file containing the test text and labels.
+        model_name: MODEL_NAMES  # The name of the model to train.
         save_dir: Path  # The path to a directory where the results will be saved.
         alpha: float = 10.0  # The value of the parameter that weighs context entropy compared to stress.
 
