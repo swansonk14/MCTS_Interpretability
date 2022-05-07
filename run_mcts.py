@@ -34,16 +34,17 @@ def train_sklearn_model(model_name: MODEL_NAMES,
     :return: The trained model.
     """
     # Build model
-    if model_name == 'bnb':
-        model = BernoulliNB()
-    elif model_name == 'mnb':
-        model = MultinomialNB()
-    elif model_name == 'mlp':
-        model = MLPClassifier(random_state=0, max_iter=1000)
-    elif model_name == 'svm':
-        model = SVC(random_state=0, probability=True)
-    else:
-        raise ValueError(f'Model name "{model_name}" is not supported.')
+    match model_name:
+        case 'bnb':
+            model = BernoulliNB()
+        case 'mnb':
+            model = MultinomialNB()
+        case 'mlp':
+            model = MLPClassifier(random_state=0, max_iter=1000)
+        case 'svm':
+            model = SVC(random_state=0, probability=True)
+        case _:
+            raise ValueError(f'Model name "{model_name}" is not supported.')
 
     # Train model
     model.fit(train_text_counts, train_labels)
@@ -114,7 +115,7 @@ def domain_entropy_scoring_fn_roberta(text: str) -> float:
 
 def run_mcts(train_path: Path,
              test_path: Path,
-             model_name: Literal['bnb', 'mnb', 'mlp', 'svm'],
+             model_name: MODEL_NAMES,
              save_path: Path,
              alpha: float = 10.0,
              ngram_range: tuple[int, int] = (1, 1),
@@ -220,6 +221,11 @@ def run_mcts(train_path: Path,
 
     # Define stress scoring function
     def stress_scoring_fn(text: str) -> float:
+        """Computes the stress score of a piece of text using a scikit-learn model applied to token counts.
+
+        :param text: The text to evaluate.
+        :return: The stress score of the text according to the model.
+        """
         counts = stress_count_vectorizer.transform([text])
 
         # Handle edge case of no recognized tokens
@@ -233,6 +239,11 @@ def run_mcts(train_path: Path,
 
     # Define context entropy scoring function
     def context_entropy_scoring_fn(text: str) -> float:
+        """Computes the context entropy score of a piece of text using a scikit-learn model applied to token counts.
+
+        :param text: The text to evaluate.
+        :return: The context entropy score of the text according to the model.
+        """
         counts = context_count_vectorizer.transform([text])
 
         # Handle edge case of no recognized tokens
@@ -246,6 +257,17 @@ def run_mcts(train_path: Path,
 
     # Define stress and context scoring function
     def stress_and_context_scoring_fn(text: str, context_dependent: bool) -> float:
+        """Computes the combined stress and context entropy score of a piece of text
+           using a scikit-learn model applied to token counts.
+
+        :param text: The text to evaluate.
+        :param context_dependent: If True, context entropy is negative,
+                                  so maximizing the score minimizes entropy (context-dependent).
+                                  If False, context entropy is positive,
+                                  so maximizing the score maximizes entropy (context-independent).
+        :return: The sum of the stress and context entropy scores with the context entropy score
+                 multiplied by negative 1 if context_dependent is True and multiplied by the weight alpha.
+        """
         stress_score = stress_scoring_fn(text)
         context_entropy = context_entropy_scoring_fn(text)
 
