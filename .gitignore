@@ -142,3 +142,7 @@ dmypy.json
 
 # Plots
 *.pdf
+
+# RoBERTa model files
+*.json
+*.bin

@@ -12,6 +12,7 @@ dependencies:
   - scikit-learn
   - scikit-learn-intelex
   - scipy
+  - torch
   - tqdm
   - transformers
   - pip:

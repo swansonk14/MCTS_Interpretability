@@ -18,6 +18,9 @@ def analyze_mcts_explanations(explanations_path: Path,
     with open(explanations_path, 'rb') as f:
         results = pickle.load(f)
 
+    # Create save_dir
+    save_dir.mkdir(parents=True, exist_ok=True)
+
     # Extract MCTS results
     original_stress = results['original_stress']
     masked_stress_dependent = results['masked_stress_dependent']
@@ -119,7 +122,9 @@ if __name__ == '__main__':
     from tap import Tap
 
     class Args(Tap):
-        explanations_path: Path  # Path to a pickle file containing the explanations from run_mcts.py.
-        save_dir: Path  # Path to a directory where analysis plots will be saved.
+        explanations_path: Path
+        """Path to a pickle file containing the explanations from run_mcts.py."""
+        save_dir: Path
+        """Path to a directory where analysis plots will be saved."""
 
     analyze_mcts_explanations(**Args().parse_args().as_dict())

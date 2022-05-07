@@ -2,10 +2,12 @@
 import pickle
 from functools import partial
 from pathlib import Path
-from typing import Literal, Set, Tuple
+from typing import Callable, Literal, Optional
 
 import numpy as np
 import pandas as pd
+import torch
+import torch.nn.functional as F
 from scipy.stats import entropy
 from sklearnex import patch_sklearn
 patch_sklearn()
@@ -15,22 +17,24 @@ from sklearn.naive_bayes import BernoulliNB, MultinomialNB
 from sklearn.neural_network import MLPClassifier
 from sklearn.svm import SVC
 from tqdm import tqdm
+from transformers import RobertaForSequenceClassification, RobertaTokenizer
 
 from mcts import get_best_mcts_node, get_phrases, MCTSExplainer
 
+SKLEARN_MODELS = {'bnb', 'mnb', 'mlp', 'svm'}
+SKLEARN_MODEL_NAMES = Literal['bnb', 'mnb', 'mlp', 'svm']
+MODEL_NAMES = Literal['bnb', 'mnb', 'mlp', 'svm', 'roberta']
+SKLEARN_MODEL_TYPES = BernoulliNB | MultinomialNB | MLPClassifier | SVC
 
-MODEL_NAMES = Literal['bnb', 'mnb', 'mlp', 'svm']
-MODEL_TYPES = BernoulliNB | MultinomialNB | MLPClassifier | SVC
 
-
-def train_sklearn_model(model_name: MODEL_NAMES,
+def train_sklearn_model(model_name: SKLEARN_MODEL_NAMES,
                         train_text_counts: np.ndarray,
-                        train_labels: np.ndarray) -> MODEL_TYPES:
+                        train_labels: list[int] | list[str]) -> SKLEARN_MODEL_TYPES:
     """Trains a scikit-learn model on the provided train token counts and labels.
 
     :param model_name: The name of the model to train.
     :param train_text_counts: A 2D array containing token counts for each training example (num_examples, num_tokens).
-    :param train_labels: A 1D array of labels for each training example.
+    :param train_labels: A list of labels for the training examples.
     :return: The trained model.
     """
     # Build model
@@ -52,15 +56,15 @@ def train_sklearn_model(model_name: MODEL_NAMES,
     return model
 
 
-def evaluate_sklearn_model(model: MODEL_TYPES,
+def evaluate_sklearn_model(model: SKLEARN_MODEL_TYPES,
                            test_text_counts: np.ndarray,
-                           test_labels: np.ndarray,
+                           test_labels: list[int] | list[str],
                            average: str) -> None:
     """Evaluates a scikit-learn model on the provided test token counts and labels.
 
     :param model: A trained scikit-learn model.
     :param test_text_counts: A 2D array containing token counts for each training example (num_examples, num_tokens).
-    :param test_labels: A 1D array of labels for each training example.
+    :param test_labels: A list of labels for the training examples.
     :param average: The type of averaging to perform to compute the metrics.
     """
     # Predict on the test set
@@ -77,46 +81,146 @@ def evaluate_sklearn_model(model: MODEL_TYPES,
     print(f'Accuracy = {accuracy:.3f}\n')
 
 
-"""
-from transformers import RobertaForSequenceClassification, RobertaTokenizer
+def build_sklearn_model(model_name: SKLEARN_MODEL_NAMES,
+                        train_texts: list[str],
+                        train_labels: list[int] | list[str],
+                        test_texts: list[str],
+                        test_labels: list[int] | list[str],
+                        ngram_range: tuple[int, int],
+                        average: str) -> tuple[CountVectorizer, SKLEARN_MODEL_TYPES]:
+    """Train and evaluate a scikit-learn model on text.
 
-# Load RoBERTa
-device = torch.device('cpu')
-torch.set_grad_enabled(False)
-softmax = torch.nn.Softmax(dim=-1)
+    :param model_name: The name of the model to train.
+    :param train_texts: A list of train texts.
+    :param train_labels: A list of train labels.
+    :param test_texts: A list of test texts.
+    :param test_labels: A list of test labels.
+    :param ngram_range: The range of n-gram sizes for extracting token count features.
+    :param average: The type of averaging to perform to compute the metrics.
+    :return: A tuple containing a fitted CountVectorizer and a fitted scikit-learn model.
+    """
+    # Fit CountVectorizer on the train texts
+    count_vectorizer = CountVectorizer(ngram_range=ngram_range)
+    count_vectorizer.fit(train_texts)
 
-tokenizer_roberta = RobertaTokenizer.from_pretrained('mental/mental-roberta-base', do_lower_case=True)
+    # Convert train and test texts to counts
+    train_text_counts = count_vectorizer.transform(train_texts)
+    test_text_counts = count_vectorizer.transform(test_texts)
 
-stress_model_roberta = RobertaForSequenceClassification.from_pretrained('/Users/kyleswanson/Stanford/three-irish-wannabe/models/stress', num_labels=2).to(device)
-stress_model_roberta.eval()
+    # Train stress model
+    model = train_sklearn_model(
+        model_name=model_name,
+        train_text_counts=train_text_counts,
+        train_labels=train_labels
+    )
 
-domain_model_roberta = RobertaForSequenceClassification.from_pretrained('/Users/kyleswanson/Stanford/three-irish-wannabe/models/domain', num_labels=3).to(device)
-domain_model_roberta.eval()
+    # Evaluate stress model
+    evaluate_sklearn_model(
+        model=model,
+        test_text_counts=test_text_counts,
+        test_labels=test_labels,
+        average=average
+    )
+
+    return count_vectorizer, model
 
 
-def stress_scoring_fn_roberta(text: str) -> float:
-    tokens = tokenizer_roberta.encode(text, return_tensors="pt", truncation=True, max_length=512).to(device)
-    stress_logits = stress_model_roberta(tokens).logits
-    stress_probs = softmax(stress_logits)
-    stress_score = stress_probs[0, 1].item()
+def compute_score_sklearn(text: str,
+                          count_vectorizer: CountVectorizer,
+                          model: SKLEARN_MODEL_TYPES,
+                          score_type: Literal['prediction', 'entropy']) -> float:
+    """Computes the stress or context entropy score of text using a scikit-learn model applied to token counts.
 
-    return stress_score
+    :param text: The text to evaluate.
+    :param count_vectorizer: A CountVectorizer fit on the training texts that computes token counts.
+    :param model: A trained scikit-learn model.
+    :param score_type: The type of score to return.
+                      'prediction' returns the prediction corresponding to the class at index 1
+                      (i.e., the positive class for binary prediction).
+                      'entropy' returns the entropy of the predictions across classes.
+    :return: The score of the text according to the model.
+    """
+    counts = count_vectorizer.transform([text])
+
+    # Handle edge case of no recognized tokens
+    # Note: when score_type == 'entropy', a different value might be preferable
+    if counts.count_nonzero() == 0:
+        return 0.5
+
+    preds = model.predict_proba(counts)
+
+    match score_type:
+        case 'prediction':
+            score = preds[0, 1]
+        case 'entropy':
+            score = entropy(preds[0])
+        case _:
+            raise ValueError(f'Score type "{score_type}" is not supported.')
+
+    return score
 
 
-def domain_entropy_scoring_fn_roberta(text: str) -> float:
-    tokens = tokenizer_roberta.encode(text, return_tensors="pt", truncation=True, max_length=512).to(device)
-    domain_logits = domain_model_roberta(tokens).logits
-    domain_probs = softmax(domain_logits)
-    domain_entropy = entropy(domain_probs[0].detach().cpu().numpy())
+def compute_score_roberta(text: str,
+                          tokenizer: RobertaTokenizer,
+                          model: RobertaForSequenceClassification,
+                          score_type: Literal['prediction', 'entropy']):
+    """Computes the stress or context entropy score of text using a RoBERTa model.
 
-    return domain_entropy
-"""
+    :param text: The text to evaluate.
+    :param tokenizer: A RobertaTokenizer fit on the training texts.
+    :param model: A trained RoBERTa model.
+    :param score_type: The type of score to return.
+                      'prediction' returns the prediction corresponding to the class at index 1
+                      (i.e., the positive class for binary prediction).
+                      'entropy' returns the entropy of the predictions across classes.
+    :return: The score of the text according to the model.
+    """
+    tokens = tokenizer.encode(text, return_tensors='pt', truncation=True, max_length=512).to(model.device)
+    logits = model(tokens).logits
+    probs = F.softmax(logits, dim=-1)
+
+    match score_type:
+        case 'prediction':
+            score = probs[0, 1].item()
+        case 'entropy':
+            score = entropy(probs[0].detach().cpu().numpy())
+        case _:
+            raise ValueError(f'Score type "{score_type}" is not supported.')
+
+    return score
+
+
+def compute_stress_and_context_entropy_score(text: str,
+                                             context_dependent: bool,
+                                             stress_scoring_fn: Callable[[str], float],
+                                             context_entropy_scoring_fn: Callable[[str], float],
+                                             alpha: float) -> float:
+    """Computes the combined stress and context entropy score of a piece of text.
+
+    :param text: The text to evaluate.
+    :param context_dependent: If True, context entropy is negative,
+                              so maximizing the score minimizes entropy (context-dependent).
+                              If False, context entropy is positive,
+                              so maximizing the score maximizes entropy (context-independent).
+    :param stress_scoring_fn: A function that computes the stress score of a piece of text.
+    :param context_entropy_scoring_fn: A function that computes the context entropy score of a piece of text.
+    :param alpha: The value of the parameter that weighs context entropy compared to stress.
+    :return: The sum of the stress and context entropy scores with the context entropy score
+             multiplied by negative 1 if context_dependent is True and multiplied by the weight alpha.
+    """
+    stress_score = stress_scoring_fn(text)
+    context_entropy = context_entropy_scoring_fn(text)
+
+    return stress_score + (-1 if context_dependent else 1) * alpha * context_entropy
 
 
 def run_mcts(train_path: Path,
              test_path: Path,
              model_name: MODEL_NAMES,
              save_path: Path,
+             stress_model_dir: Optional[Path] = None,
+             context_model_dir: Optional[Path] = None,
+             device: Optional[int] = None,
              alpha: float = 10.0,
              ngram_range: tuple[int, int] = (1, 1),
              max_phrases: int = 3,
@@ -132,6 +236,12 @@ def run_mcts(train_path: Path,
     :param test_path: The path to the CSV file containing the test text and labels.
     :param model_name: The name of the model to train.
     :param save_path: The path to a pickle file where the explanations will be saved.
+    :param stress_model_dir: Path to directory containing a RoBERTa config.json and pytorch_model.bin
+                             trained on stress (if model_name == 'roberta').
+    :param context_model_dir: Path to directory containing a RoBERTa config.json and pytorch_model.bin
+                              trained on context (if model_name == 'roberta').
+    :param device: The GPU device on which to run the model. If None, defaults to CPU.
+                   Only applicable if model_name == 'roberta'.
     :param alpha: The value of the parameter that weighs context entropy compared to stress.
     :param ngram_range: The range of n-gram sizes for extracting token count features for scikit-learn models.
     :param max_phrases: Maximum number of phrases in an explanation.
@@ -146,138 +256,137 @@ def run_mcts(train_path: Path,
     # Load train data
     train_data = pd.read_csv(train_path)
     train_texts, train_stress, train_subreddits = train_data['text'], train_data['label'], train_data['subreddit']
+    num_train_stressed = np.sum(train_stress)
 
-    print(f'Train size = {len(train_texts):,}')
-    print(f'Num stressed = {np.sum(train_stress):,}\n')
+    print(f'Stress train size = {len(train_texts):,}')
+    print(f'Num stressed = {num_train_stressed:,} ({100 * num_train_stressed / len(train_texts):.1f}%)\n')
 
     # Load test data
     test_data = pd.read_csv(test_path)
     test_texts, test_stress, test_subreddits = test_data['text'], test_data['label'], test_data['subreddit']
+    num_test_stressed = np.sum(test_stress)
 
-    print(f'Test size = {len(test_texts):,}')
-    print(f'Num stressed = {np.sum(test_stress):,}\n')
+    print(f'Stress test size = {len(test_texts):,}')
+    print(f'Num stressed = {num_test_stressed:,} ({100 * num_test_stressed / len(test_texts):.1f}%)\n')
 
-    # Fit CountVectorizer on the train texts for stress model
-    stress_count_vectorizer = CountVectorizer(ngram_range=ngram_range).fit(train_texts)
-
-    # Convert train and test texts to counts
-    train_text_counts = stress_count_vectorizer.transform(train_texts)
-    test_text_counts = stress_count_vectorizer.transform(test_texts)
-
-    # Train stress model
-    print(f'Stress {model_name.upper()} model')
-    stress_model = train_sklearn_model(
-        model_name=model_name,
-        train_text_counts=train_text_counts,
-        train_labels=train_stress
-    )
-
-    # Evaluate stress model
-    evaluate_sklearn_model(
-        model=stress_model,
-        test_text_counts=test_text_counts,
-        test_labels=test_stress,
-        average='binary'
-    )
-
-    # Filter to certain subreddits
+    # Filter data to certain subreddits
     selected_subreddits = {'anxiety', 'relationships', 'assistance'}
-    print(f'Filtering data to only contain these subreddits: {selected_subreddits}\n')
+    print(f'Filtering context data to only contain these subreddits: {selected_subreddits}\n')
 
     # Filter training data to certain subreddits
     train_subreddit_mask = np.array([subreddit in selected_subreddits for subreddit in train_subreddits])
     train_texts_selected = train_texts[train_subreddit_mask]
     train_subreddits_selected = train_subreddits[train_subreddit_mask]
-    print(f'Train size after filtering = {len(train_texts_selected):,}\n')
+    print(f'Context train size = {len(train_texts_selected):,}')
+    for subreddit, count in train_subreddits_selected.value_counts().items():
+        print(f'Num {subreddit} = {count:,} ({100 * count / len(train_texts_selected):.1f}%)')
+    print()
 
     # Filter test data to certain subreddits
     test_subreddit_mask = np.array([subreddit in selected_subreddits for subreddit in test_subreddits])
     test_texts_selected = test_texts[test_subreddit_mask]
     test_subreddits_selected = test_subreddits[test_subreddit_mask]
-    print(f'Test size after filtering = {len(test_texts_selected):,}\n')
+    print(f'Context test size = {len(test_texts_selected):,}')
+    for subreddit, count in test_subreddits_selected.value_counts().items():
+        print(f'Num {subreddit} = {count:,} ({100 * count / len(test_texts_selected):.1f}%)')
+    print()
 
-    # Fit CountVectorizer on selected train texts for context model
-    context_count_vectorizer = CountVectorizer(ngram_range=ngram_range).fit(train_texts_selected)
+    # Build models
+    if model_name in SKLEARN_MODELS:
+        # Ensure model directories are not provided accidentally
+        if stress_model_dir is not None or context_model_dir is not None or device is not None:
+            raise ValueError('Model directories and/or device should not be provided for scikit-learn models, '
+                             'only for RoBERTa models.')
 
-    # Convert train and test texts to counts
-    train_text_selected_counts = context_count_vectorizer.transform(train_texts_selected)
-    test_text_selected_counts = context_count_vectorizer.transform(test_texts_selected)
+        print(f'Training and evaluating stress {model_name.upper()} model')
 
-    # Train subreddit model
-    print(f'Context (subreddit) {model_name.upper()} model')
-    context_model = train_sklearn_model(
-        model_name=model_name,
-        train_text_counts=train_text_selected_counts,
-        train_labels=train_subreddits_selected
+        # Train and evaluate stress model
+        stress_count_vectorizer, stress_model = build_sklearn_model(
+            model_name=model_name,
+            train_texts=train_texts,
+            train_labels=train_stress,
+            test_texts=test_texts,
+            test_labels=test_stress,
+            ngram_range=ngram_range,
+            average='binary'
+        )
+
+        # Define stress scoring function
+        stress_scoring_fn = partial(
+            compute_score_sklearn,
+            count_vectorizer=stress_count_vectorizer,
+            model=stress_model,
+            score_type='prediction'
+        )
+
+        print(f'Training and evaluating context (subreddit) {model_name.upper()} model')
+
+        # Train and evaluate context model
+        context_count_vectorizer, context_model = build_sklearn_model(
+            model_name=model_name,
+            train_texts=train_texts_selected,
+            train_labels=train_subreddits_selected,
+            test_texts=test_texts_selected,
+            test_labels=test_subreddits_selected,
+            ngram_range=ngram_range,
+            average='macro'
+        )
+
+        # Define context entropy scoring function
+        context_entropy_scoring_fn = partial(
+            compute_score_sklearn,
+            count_vectorizer=context_count_vectorizer,
+            model=context_model,
+            score_type='entropy'
+        )
+    elif model_name == 'roberta':
+        device = torch.device(device if device is not None else 'cpu')
+        torch.set_grad_enabled(False)
+        tokenizer = RobertaTokenizer.from_pretrained('mental/mental-roberta-base', do_lower_case=True)
+
+        print('Loading stress RoBERTa model')
+
+        # Load stress model
+        stress_model = RobertaForSequenceClassification.from_pretrained(stress_model_dir, num_labels=2)
+        stress_model.to(device).eval()
+
+        # Define stress scoring function
+        stress_scoring_fn = partial(
+            compute_score_roberta,
+            tokenizer=tokenizer,
+            model=stress_model,
+            score_type='prediction'
+        )
+
+        print('Loading context (subreddit) RoBERTa model')
+
+        # Load context model
+        context_model = RobertaForSequenceClassification.from_pretrained(context_model_dir, num_labels=3)
+        context_model.to(device).eval()
+
+        # Define context entropy scoring function
+        context_entropy_scoring_fn = partial(
+            compute_score_roberta,
+            tokenizer=tokenizer,
+            model=context_model,
+            score_type='entropy'
+        )
+    else:
+        raise ValueError(f'Model name "{model_name} is not supported.')
+
+    # Define stress and context entropy scoring function
+    stress_and_context_entropy_scoring_fn = partial(
+        compute_stress_and_context_entropy_score,
+        stress_scoring_fn=stress_scoring_fn,
+        context_entropy_scoring_fn=context_entropy_scoring_fn,
+        alpha=alpha
     )
-
-    # Evaluate subreddit model
-    evaluate_sklearn_model(
-        model=context_model,
-        test_text_counts=test_text_selected_counts,
-        test_labels=test_subreddits_selected,
-        average='macro'
-    )
-
-    # Define stress scoring function
-    def stress_scoring_fn(text: str) -> float:
-        """Computes the stress score of a piece of text using a scikit-learn model applied to token counts.
-
-        :param text: The text to evaluate.
-        :return: The stress score of the text according to the model.
-        """
-        counts = stress_count_vectorizer.transform([text])
-
-        # Handle edge case of no recognized tokens
-        if counts.count_nonzero() == 0:
-            return 0.5
-
-        stress_preds = stress_model.predict_proba(counts)
-        stress_score = stress_preds[0, 1]
-
-        return stress_score
-
-    # Define context entropy scoring function
-    def context_entropy_scoring_fn(text: str) -> float:
-        """Computes the context entropy score of a piece of text using a scikit-learn model applied to token counts.
-
-        :param text: The text to evaluate.
-        :return: The context entropy score of the text according to the model.
-        """
-        counts = context_count_vectorizer.transform([text])
-
-        # Handle edge case of no recognized tokens
-        if counts.count_nonzero() == 0:
-            return 0.5
-
-        context_preds = context_model.predict_proba(counts)
-        context_entropy = entropy(context_preds[0])
-
-        return context_entropy
-
-    # Define stress and context scoring function
-    def stress_and_context_scoring_fn(text: str, context_dependent: bool) -> float:
-        """Computes the combined stress and context entropy score of a piece of text
-           using a scikit-learn model applied to token counts.
-
-        :param text: The text to evaluate.
-        :param context_dependent: If True, context entropy is negative,
-                                  so maximizing the score minimizes entropy (context-dependent).
-                                  If False, context entropy is positive,
-                                  so maximizing the score maximizes entropy (context-independent).
-        :return: The sum of the stress and context entropy scores with the context entropy score
-                 multiplied by negative 1 if context_dependent is True and multiplied by the weight alpha.
-        """
-        stress_score = stress_scoring_fn(text)
-        context_entropy = context_entropy_scoring_fn(text)
-
-        return stress_score + (-1 if context_dependent else 1) * alpha * context_entropy
 
     # Create an MCTSExplainer with the defined scoring function
     mcts_explainer = MCTSExplainer(
         max_phrases=max_phrases,
         min_phrase_length=min_phrase_length,
-        scoring_fn=stress_and_context_scoring_fn,
+        scoring_fn=stress_and_context_entropy_scoring_fn,
         n_rollout=n_rollout,
         min_percent_unmasked=min_percent_unmasked,
         c_puct=c_puct,
@@ -338,18 +447,40 @@ if __name__ == '__main__':
     from tap import Tap
 
     class Args(Tap):
-        train_path: Path  # The path to the CSV file containing the train text and labels.
-        test_path: Path  # The path to the CSV file containing the test text and labels.
-        model_name: MODEL_NAMES  # The name of the model to train.
-        save_path: Path  # The path to a pickle file where the explanations will be saved.
-        alpha: float = 10.0  # The value of the parameter that weighs context entropy compared to stress.
-        ngram_range: tuple[int, int] = (1, 1)  # The range of n-gram sizes for extracting token count features for scikit-learn models.
-        max_phrases: int = 3  # Maximum number of phrases in an explanation.
-        min_phrase_length: int = 5  # Minimum number of words in a phrase.
-        n_rollout: int = 20  # The number of times to build the Monte Carlo tree.
-        min_percent_unmasked: float = 0.2  # The minimum percent of words unmasked, used as a stopping point for leaf nodes in the search tree.
-        max_percent_unmasked: float = 0.5  # The maximum percent of words that are unmasked.
-        c_puct: float = 10.0  # The hyperparameter that encourages exploration.
-        num_expand_nodes: int = 10  # The number of MCTS nodes to expand when extending the child nodes in the search tree.
+        train_path: Path
+        """The path to the CSV file containing the train text and labels."""
+        test_path: Path
+        """The path to the CSV file containing the test text and labels."""
+        model_name: MODEL_NAMES
+        """The name of the model to train."""
+        save_path: Path
+        """The path to a pickle file where the explanations will be saved."""
+        stress_model_dir: Optional[Path] = None
+        """Path to directory containing a RoBERTa config.json and pytorch_model.bin
+           trained on stress (if model_name == 'roberta')."""
+        context_model_dir: Optional[Path] = None
+        """Path to directory containing a RoBERTa config.json and pytorch_model.bin
+           trained on context (if model_name == 'roberta')."""
+        device: Optional[int] = None
+        """The GPU device on which to run the model. If None, defaults to CPU.
+           Only applicable if model_name == 'roberta'."""
+        alpha: float = 10.0
+        """The value of the parameter that weighs context entropy compared to stress."""
+        ngram_range: tuple[int, int] = (1, 1)
+        """The range of n-gram sizes for extracting token count features for scikit-learn models."""
+        max_phrases: int = 3
+        """Maximum number of phrases in an explanation."""
+        min_phrase_length: int = 5
+        """Minimum number of words in a phrase."""
+        n_rollout: int = 20
+        """The number of times to build the Monte Carlo tree."""
+        min_percent_unmasked: float = 0.2
+        """The minimum percent of words unmasked, used as a stopping point for leaf nodes in the search tree."""
+        max_percent_unmasked: float = 0.5
+        """The maximum percent of words that are unmasked."""
+        c_puct: float = 10.0
+        """The hyperparameter that encourages exploration."""
+        num_expand_nodes: int = 10
+        """The number of MCTS nodes to expand when extending the child nodes in the search tree."""
 
     run_mcts(**Args().parse_args().as_dict())
