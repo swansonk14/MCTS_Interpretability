@@ -121,12 +121,11 @@ class MCTS:
                  n_rollout: int,
                  min_percent_unmasked: float,
                  c_puct: float,
-                 num_expand_nodes: int,
-                 high2low: bool) -> None:
+                 num_expand_nodes: int) -> None:
         """Creates the Monte Carlo Tree Search (MCTS) object.
 
         :param text: The input text.
-        :param max_phrases: Maximum number of phrases.
+        :param max_phrases: Maximum number of phrases in an explanation.
         :param min_phrase_length: Minimum number of words in a phrase.
         :param scoring_fn: A function that takes as input a string and returns a score.
         :param n_rollout: The number of times to build the Monte Carlo tree.
@@ -134,8 +133,6 @@ class MCTS:
                                      used as a stopping point for leaf nodes in the search tree.
         :param c_puct: The hyperparameter that encourages exploration.
         :param num_expand_nodes: The number of MCTS nodes to expand when extending the child nodes in the search tree.
-        :param high2low: Whether to expand children nodes from high degree to low degree
-                         when extending the child nodes in the search tree.
         """
         self.text = text
         self.words = tuple(text.split())
@@ -146,7 +143,6 @@ class MCTS:
         self.min_percent_unmasked = min_percent_unmasked
         self.c_puct = c_puct
         self.num_expand_nodes = num_expand_nodes
-        self.high2low = high2low
         self.random = Random(0)
 
         self.root_mask = tuple([1] * len(self.words))
@@ -244,11 +240,10 @@ class MCTSExplainer:
                  n_rollout: int,
                  min_percent_unmasked: float,
                  c_puct: float,
-                 num_expand_nodes: int,
-                 high2low: bool) -> None:
+                 num_expand_nodes: int) -> None:
         """Creates the Monte Carlo Tree Search (MCTS) Explainer object.
 
-        :param max_phrases: Maximum number of phrases.
+        :param max_phrases: Maximum number of phrases in an explanation.
         :param min_phrase_length: Minimum number of words in a phrase.
         :param scoring_fn: A function that takes as input a string and returns a score.
         :param n_rollout: The number of times to build the Monte Carlo tree.
@@ -256,8 +251,6 @@ class MCTSExplainer:
                                      used as a stopping point for leaf nodes in the search tree.
         :param c_puct: The hyperparameter that encourages exploration.
         :param num_expand_nodes: The number of MCTS nodes to expand when extending the child nodes in the search tree.
-        :param high2low: Whether to expand children nodes from high degree to low degree
-                         when extending the child nodes in the search tree.
         """
         self.max_phrases = max_phrases
         self.min_phrase_length = min_phrase_length
@@ -266,7 +259,6 @@ class MCTSExplainer:
         self.min_percent_unmasked = min_percent_unmasked
         self.c_puct = c_puct
         self.num_expand_nodes = num_expand_nodes
-        self.high2low = high2low
 
     def explain(self, text: str, context_dependent: bool) -> List[MCTSNode]:
         return MCTS(
@@ -277,6 +269,5 @@ class MCTSExplainer:
             n_rollout=self.n_rollout,
             min_percent_unmasked=self.min_percent_unmasked,
             c_puct=self.c_puct,
-            num_expand_nodes=self.num_expand_nodes,
-            high2low=self.high2low
+            num_expand_nodes=self.num_expand_nodes
         ).run_mcts()

@@ -116,7 +116,15 @@ def run_mcts(train_path: Path,
              test_path: Path,
              model_name: Literal['bnb', 'mnb', 'mlp', 'svm'],
              save_path: Path,
-             alpha: float = 10.0) -> None:
+             alpha: float = 10.0,
+             ngram_range: tuple[int, int] = (1, 1),
+             max_phrases: int = 3,
+             min_phrase_length: int = 5,
+             n_rollout: int = 20,
+             min_percent_unmasked: float = 0.2,
+             max_percent_unmasked: float = 0.5,
+             c_puct: float = 10.0,
+             num_expand_nodes: int = 10) -> None:
     """Runs MCTS to extract context-dependent and context-independent explanations from text.
 
     :param train_path: The path to the CSV file containing the train text and labels.
@@ -124,6 +132,15 @@ def run_mcts(train_path: Path,
     :param model_name: The name of the model to train.
     :param save_path: The path to a pickle file where the explanations will be saved.
     :param alpha: The value of the parameter that weighs context entropy compared to stress.
+    :param ngram_range: The range of n-gram sizes for extracting token count features for scikit-learn models.
+    :param max_phrases: Maximum number of phrases in an explanation.
+    :param min_phrase_length: Minimum number of words in a phrase.
+    :param n_rollout: The number of times to build the Monte Carlo tree.
+    :param min_percent_unmasked: The minimum percent of words unmasked,
+                                 used as a stopping point for leaf nodes in the search tree.
+    :param max_percent_unmasked: The maximum percent of words that are unmasked.
+    :param c_puct: The hyperparameter that encourages exploration.
+    :param num_expand_nodes: The number of MCTS nodes to expand when extending the child nodes in the search tree.
     """
     # Load train data
     train_data = pd.read_csv(train_path)
@@ -140,7 +157,7 @@ def run_mcts(train_path: Path,
     print(f'Num stressed = {np.sum(test_stress):,}\n')
 
     # Fit CountVectorizer on the train texts for stress model
-    stress_count_vectorizer = CountVectorizer(ngram_range=(1, 1)).fit(train_texts)
+    stress_count_vectorizer = CountVectorizer(ngram_range=ngram_range).fit(train_texts)
 
     # Convert train and test texts to counts
     train_text_counts = stress_count_vectorizer.transform(train_texts)
@@ -179,7 +196,7 @@ def run_mcts(train_path: Path,
     print(f'Test size after filtering = {len(test_texts_selected):,}\n')
 
     # Fit CountVectorizer on selected train texts for context model
-    context_count_vectorizer = CountVectorizer(ngram_range=(1, 1)).fit(train_texts_selected)
+    context_count_vectorizer = CountVectorizer(ngram_range=ngram_range).fit(train_texts_selected)
 
     # Convert train and test texts to counts
     train_text_selected_counts = context_count_vectorizer.transform(train_texts_selected)
@@ -236,14 +253,13 @@ def run_mcts(train_path: Path,
 
     # Create an MCTSExplainer with the defined scoring function
     mcts_explainer = MCTSExplainer(
-        max_phrases=3,
-        min_phrase_length=5,
+        max_phrases=max_phrases,
+        min_phrase_length=min_phrase_length,
         scoring_fn=stress_and_context_scoring_fn,
-        n_rollout=20,
-        min_percent_unmasked=0.2,
-        c_puct=10.0,
-        num_expand_nodes=10,
-        high2low=False
+        n_rollout=n_rollout,
+        min_percent_unmasked=min_percent_unmasked,
+        c_puct=c_puct,
+        num_expand_nodes=num_expand_nodes
     )
 
     # Get all the test texts from the selected subreddits that are stressed
@@ -261,7 +277,7 @@ def run_mcts(train_path: Path,
     masked_entropy_independent = []
 
     # Run MCTS on each text in both context-dependent and context-independent manners
-    for text in tqdm(stressed_test_texts[:5]):
+    for text in tqdm(stressed_test_texts):
         original_stress.append(stress_scoring_fn(text))
         original_entropy.append(context_entropy_scoring_fn(text))
 
@@ -270,7 +286,7 @@ def run_mcts(train_path: Path,
             (False, masked_stress_independent, masked_entropy_independent)
         ]:
             mcts_nodes = mcts_explainer.explain(text=text, context_dependent=context_dependent)
-            best_mcts_node = get_best_mcts_node(mcts_nodes, max_percent_unmasked=0.5)
+            best_mcts_node = get_best_mcts_node(mcts_nodes, max_percent_unmasked=max_percent_unmasked)
             words = best_mcts_node.words
             mask = best_mcts_node.mask
 
@@ -305,5 +321,13 @@ if __name__ == '__main__':
         model_name: MODEL_NAMES  # The name of the model to train.
         save_path: Path  # The path to a pickle file where the explanations will be saved.
         alpha: float = 10.0  # The value of the parameter that weighs context entropy compared to stress.
+        ngram_range: tuple[int, int] = (1, 1)  # The range of n-gram sizes for extracting token count features for scikit-learn models.
+        max_phrases: int = 3  # Maximum number of phrases in an explanation.
+        min_phrase_length: int = 5  # Minimum number of words in a phrase.
+        n_rollout: int = 20  # The number of times to build the Monte Carlo tree.
+        min_percent_unmasked: float = 0.2  # The minimum percent of words unmasked, used as a stopping point for leaf nodes in the search tree.
+        max_percent_unmasked: float = 0.5  # The maximum percent of words that are unmasked.
+        c_puct: float = 10.0  # The hyperparameter that encourages exploration.
+        num_expand_nodes: int = 10  # The number of MCTS nodes to expand when extending the child nodes in the search tree.
 
     run_mcts(**Args().parse_args().as_dict())
