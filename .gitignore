@@ -136,3 +136,9 @@ dmypy.json
 
 # Data files
 *.csv
+
+# Explanation files
+*.pkl
+
+# Plots
+*.pdf

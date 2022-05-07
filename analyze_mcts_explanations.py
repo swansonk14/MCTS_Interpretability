@@ -7,13 +7,15 @@ import numpy as np
 from scipy.stats import wilcoxon
 
 
-def analyze_mcts_explanations(explanations_dir: Path) -> None:
+def analyze_mcts_explanations(explanations_path: Path,
+                              save_dir: Path) -> None:
     """Analyzes the MCTS explanations output by run_mcts.py in terms of stress and context entropy.
 
-    :param explanations_dir: Path to a directory containing the explanations from run_mcts.py. Plots will be saved here.
+    :param explanations_path: Path to a pickle file containing the explanations from run_mcts.py.
+    :param save_dir: Path to a directory where analysis plots will be saved.
     """
     # Load MCTS results
-    with open(explanations_dir, 'rb') as f:
+    with open(explanations_path, 'rb') as f:
         results = pickle.load(f)
 
     # Extract MCTS results
@@ -37,7 +39,7 @@ def analyze_mcts_explanations(explanations_dir: Path) -> None:
     plt.xlabel('Stress Score', fontsize=20)
     plt.xticks(fontsize=16)
     plt.title(rf'Stress Score for Original Text and Explanations', fontsize=24)
-    plt.savefig(explanations_dir / f'stress.pdf', bbox_inches='tight')
+    plt.savefig(save_dir / f'stress.pdf', bbox_inches='tight')
 
     # Plot entropy
     max_entropy = -np.log2(1 / 3)
@@ -53,7 +55,7 @@ def analyze_mcts_explanations(explanations_dir: Path) -> None:
     plt.xlabel('Context Entropy', fontsize=20)
     plt.xticks(fontsize=16)
     plt.title(rf'Context Entropy for Original Text and Explanations', fontsize=24)
-    plt.savefig(explanations_dir / f'entropy.pdf', bbox_inches='tight')
+    plt.savefig(save_dir / f'entropy.pdf', bbox_inches='tight')
 
     # Print stress and entropy results
     print(f'Average stress (original) = '
@@ -117,6 +119,7 @@ if __name__ == '__main__':
     from tap import Tap
 
     class Args(Tap):
-        results_dir: Path  # Path to a directory containing the explanations from run_mcts.py. Plots will be saved here.
+        explanations_path: Path  # Path to a pickle file containing the explanations from run_mcts.py.
+        save_dir: Path  # Path to a directory where analysis plots will be saved.
 
     analyze_mcts_explanations(**Args().parse_args().as_dict())

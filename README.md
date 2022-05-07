@@ -33,12 +33,13 @@ python run_mcts.py \
     --train_path data/dreaddit-train.csv \
     --test_path data/dreaddit-test.csv \
     --model_name mlp \
-    --save_dir mcts_explanations/mlp
+    --save_path explanations/mlp/explanations.pkl
 ```
 
 Analyze the MCTS explanations in terms of stress and context entropy.
 
 ```
 python analyze_mcts_explanations.py \
-    --explanations_dir mcts_explanations/mlp
+    --explanations_path explanations/mlp/explanations.pkl \
+    --save_dir explanations/mlp
 ```

@@ -73,7 +73,7 @@ def evaluate_sklearn_model(model: MODEL_TYPES,
     print(f'Precision = {precision:.3f}')
     print(f'Recall = {recall:.3f}')
     print(f'F1 = {f1:.3f}')
-    print(f'Accuracy = {accuracy:.3f}\n\n')
+    print(f'Accuracy = {accuracy:.3f}\n')
 
 
 """
@@ -115,17 +115,16 @@ def domain_entropy_scoring_fn_roberta(text: str) -> float:
 def run_mcts(train_path: Path,
              test_path: Path,
              model_name: Literal['bnb', 'mnb', 'mlp', 'svm'],
-             save_dir: Path,
+             save_path: Path,
              alpha: float = 10.0) -> None:
     """Runs MCTS to extract context-dependent and context-independent explanations from text.
 
     :param train_path: The path to the CSV file containing the train text and labels.
     :param test_path: The path to the CSV file containing the test text and labels.
     :param model_name: The name of the model to train.
-    :param save_dir: The path to a directory where the results will be saved.
+    :param save_path: The path to a pickle file where the explanations will be saved.
     :param alpha: The value of the parameter that weighs context entropy compared to stress.
     """
-    breakpoint()
     # Load train data
     train_data = pd.read_csv(train_path)
     train_texts, train_stress, train_subreddits = train_data['text'], train_data['label'], train_data['subreddit']
@@ -148,7 +147,7 @@ def run_mcts(train_path: Path,
     test_text_counts = stress_count_vectorizer.transform(test_texts)
 
     # Train stress model
-    print(f'Stress {model_name} model')
+    print(f'Stress {model_name.upper()} model')
     stress_model = train_sklearn_model(
         model_name=model_name,
         train_text_counts=train_text_counts,
@@ -187,7 +186,7 @@ def run_mcts(train_path: Path,
     test_text_selected_counts = context_count_vectorizer.transform(test_texts_selected)
 
     # Train subreddit model
-    print(f'Context (subreddit) {model_name} model')
+    print(f'Context (subreddit) {model_name.upper()} model')
     context_model = train_sklearn_model(
         model_name=model_name,
         train_text_counts=train_text_selected_counts,
@@ -262,7 +261,7 @@ def run_mcts(train_path: Path,
     masked_entropy_independent = []
 
     # Run MCTS on each text in both context-dependent and context-independent manners
-    for text in tqdm(stressed_test_texts):
+    for text in tqdm(stressed_test_texts[:5]):
         original_stress.append(stress_scoring_fn(text))
         original_entropy.append(context_entropy_scoring_fn(text))
 
@@ -280,7 +279,7 @@ def run_mcts(train_path: Path,
             masked_stress.append(np.mean([stress_scoring_fn(text_phrase) for text_phrase in text_phrases]))
             masked_entropy.append(np.mean([context_entropy_scoring_fn(text_phrase) for text_phrase in text_phrases]))
 
-    # Save the results
+    # Save the explanations
     results = {
         'texts': stressed_test_texts,
         'original_stress': np.array(original_stress),
@@ -291,9 +290,9 @@ def run_mcts(train_path: Path,
         'masked_entropy_independent': np.array(masked_entropy_independent)
     }
 
-    save_dir.mkdir(parents=True, exist_ok=True)
+    save_path.parent.mkdir(parents=True, exist_ok=True)
 
-    with open(save_dir / f'{model_name}_alpha_{alpha}.pkl', 'wb') as f:
+    with open(save_path, 'wb') as f:
         pickle.dump(results, f)
 
 
@@ -304,7 +303,7 @@ if __name__ == '__main__':
         train_path: Path  # The path to the CSV file containing the train text and labels.
         test_path: Path  # The path to the CSV file containing the test text and labels.
         model_name: MODEL_NAMES  # The name of the model to train.
-        save_dir: Path  # The path to a directory where the results will be saved.
+        save_path: Path  # The path to a pickle file where the explanations will be saved.
         alpha: float = 10.0  # The value of the parameter that weighs context entropy compared to stress.
 
     run_mcts(**Args().parse_args().as_dict())
